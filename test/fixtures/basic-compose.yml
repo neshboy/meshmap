@@ -1,0 +1,21 @@
+services:
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+      - "8443:443/udp"
+    depends_on:
+      - db
+    networks:
+      - backend
+
+  db:
+    image: postgres:16
+    ports:
+      - "5432"
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge

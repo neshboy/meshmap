@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - web
+    networks:
+      - frontend
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - DATABASE_URL=postgres://app:app@db:5432/app
+      - REDIS_URL=redis://cache:6379
+      - DEBUG=false
+    depends_on:
+      - db
+      - cache
+    networks:
+      - frontend
+      - backend
+
+  worker:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.worker
+    environment:
+      - DATABASE_URL=postgres://app:app@db:5432/app
+      - REDIS_URL=redis://cache:6379
+    depends_on:
+      - db
+      - cache
+    networks:
+      - backend
+
+  db:
+    image: postgres:16
+    ports:
+      - "5432"
+    environment:
+      - POSTGRES_USER=app
+      - POSTGRES_PASSWORD=app
+      - POSTGRES_DB=app
+    networks:
+      - backend
+
+  cache:
+    image: redis:7-alpine
+    networks:
+      - backend
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge

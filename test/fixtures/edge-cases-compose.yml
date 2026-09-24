@@ -1,0 +1,39 @@
+services:
+  api:
+    image: registry.example.com/api:latest
+    ports:
+      - target: 8080
+        published: 9090
+        protocol: tcp
+      - target: 8443
+        published: 9443
+        protocol: udp
+    depends_on:
+      queue:
+        condition: service_healthy
+    environment:
+      API_KEY: secret-value
+      LOG_LEVEL: info
+    networks:
+      - app_net
+
+  queue:
+    image: rabbitmq:3-management
+    networks:
+      app_net: {}
+
+  # No `networks:` key at all -> should fall back to the implicit "default" network.
+  sidecar:
+    image: busybox:latest
+
+  # Attached to a pre-existing, externally managed network.
+  proxy:
+    image: traefik:v3
+    networks:
+      - shared_edge
+
+networks:
+  app_net:
+    driver: bridge
+  shared_edge:
+    external: true
