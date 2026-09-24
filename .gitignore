@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# generated artifacts from running meshmap locally
+/topology.html
+/snapshot.json
+/*.snapshot.json
