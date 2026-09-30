@@ -2,9 +2,35 @@ import { describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { parseComposeFile } from "../src/parser";
 import { diffGraphs, formatDiff } from "../src/diff";
+import type { ComposeGraph } from "../src/types";
 
 function fixture(name: string): string {
   return path.join(__dirname, "fixtures", name);
+}
+
+/** Minimal ComposeGraph builder for synthetic before/after pairs, defaulting fields callers don't care about. */
+function graph(overrides: Partial<ComposeGraph>): ComposeGraph {
+  return {
+    version: 1,
+    services: [],
+    networks: [],
+    edges: [],
+    sources: ["synthetic"],
+    ...overrides,
+  };
+}
+
+function service(overrides: Partial<ComposeGraph["services"][number]>) {
+  return {
+    name: "svc",
+    image: null,
+    build: null,
+    networks: [],
+    dependsOn: [],
+    ports: [],
+    environmentKeys: [],
+    ...overrides,
+  };
 }
 
 describe("diffGraphs", () => {
@@ -47,5 +73,77 @@ describe("diffGraphs", () => {
     const identical = diffGraphs(before, before);
     expect(identical.hasChanges).toBe(false);
     expect(formatDiff(identical)).toBe("No drift detected: current compose file matches the snapshot.");
+  });
+});
+
+describe("diffGraphs: environment variable drift", () => {
+  it("flags a service as changed when environment keys are added, removed, or renamed", () => {
+    const before = graph({
+      services: [service({ name: "web", environmentKeys: ["DATABASE_URL"] })],
+    });
+    const after = graph({
+      services: [service({ name: "web", environmentKeys: ["DATABASE_URL", "SECRET_TOKEN"] })],
+    });
+
+    const diff = diffGraphs(before, after);
+    expect(diff.hasChanges).toBe(true);
+
+    const webChange = diff.servicesChanged.find((c) => c.name === "web");
+    expect(webChange).toBeDefined();
+    expect(webChange!.environmentKeysAdded).toEqual(["SECRET_TOKEN"]);
+    expect(webChange!.environmentKeysRemoved).toEqual([]);
+    expect(formatDiff(diff)).toContain("+ environment SECRET_TOKEN");
+  });
+
+  it("reports a removed environment key", () => {
+    const before = graph({
+      services: [service({ name: "web", environmentKeys: ["DATABASE_URL", "OLD_FLAG"] })],
+    });
+    const after = graph({
+      services: [service({ name: "web", environmentKeys: ["DATABASE_URL"] })],
+    });
+
+    const diff = diffGraphs(before, after);
+    const webChange = diff.servicesChanged.find((c) => c.name === "web");
+    expect(webChange!.environmentKeysRemoved).toEqual(["OLD_FLAG"]);
+    expect(formatDiff(diff)).toContain("- environment OLD_FLAG");
+  });
+});
+
+describe("diffGraphs: network config drift", () => {
+  it("flags a network that keeps its name but changes driver/external", () => {
+    const before = graph({
+      networks: [{ name: "backend", external: false, driver: "bridge" }],
+    });
+    const after = graph({
+      networks: [{ name: "backend", external: true, driver: null }],
+    });
+
+    const diff = diffGraphs(before, after);
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.networksAdded).toEqual([]);
+    expect(diff.networksRemoved).toEqual([]);
+
+    const netChange = diff.networksChanged.find((c) => c.name === "backend");
+    expect(netChange).toBeDefined();
+    expect(netChange!.external).toEqual({ before: false, after: true });
+    expect(netChange!.driver).toEqual({ before: "bridge", after: null });
+
+    const text = formatDiff(diff);
+    expect(text).toContain("~ network changed: backend");
+    expect(text).toContain("external: false -> true");
+  });
+
+  it("does not flag a network with unchanged driver/external", () => {
+    const before = graph({
+      networks: [{ name: "backend", external: false, driver: "bridge" }],
+    });
+    const after = graph({
+      networks: [{ name: "backend", external: false, driver: "bridge" }],
+    });
+
+    const diff = diffGraphs(before, after);
+    expect(diff.hasChanges).toBe(false);
+    expect(diff.networksChanged).toEqual([]);
   });
 });

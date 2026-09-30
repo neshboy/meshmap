@@ -1,4 +1,4 @@
-import type { ComposeGraph, PortMapping, ServiceNode } from "./types";
+import type { ComposeGraph, NetworkNode, PortMapping, ServiceNode } from "./types";
 
 export interface ServiceChange {
   name: string;
@@ -10,6 +10,15 @@ export interface ServiceChange {
   networksRemoved: string[];
   dependsOnAdded: string[];
   dependsOnRemoved: string[];
+  environmentKeysAdded: string[];
+  environmentKeysRemoved: string[];
+}
+
+/** A change to a network that keeps its name but has different config (driver/external). */
+export interface NetworkChange {
+  name: string;
+  driver?: { before: string | null; after: string | null };
+  external?: { before: boolean; after: boolean };
 }
 
 export interface GraphDiff {
@@ -18,6 +27,7 @@ export interface GraphDiff {
   servicesChanged: ServiceChange[];
   networksAdded: string[];
   networksRemoved: string[];
+  networksChanged: NetworkChange[];
   hasChanges: boolean;
 }
 
@@ -42,6 +52,8 @@ function diffService(before: ServiceNode, after: ServiceNode): ServiceChange | n
     networksRemoved: [],
     dependsOnAdded: [],
     dependsOnRemoved: [],
+    environmentKeysAdded: [],
+    environmentKeysRemoved: [],
   };
   let changed = false;
 
@@ -75,6 +87,30 @@ function diffService(before: ServiceNode, after: ServiceNode): ServiceChange | n
     changed = true;
   }
 
+  const envDiff = setDiff(before.environmentKeys, after.environmentKeys);
+  if (envDiff.added.length || envDiff.removed.length) {
+    change.environmentKeysAdded = envDiff.added;
+    change.environmentKeysRemoved = envDiff.removed;
+    changed = true;
+  }
+
+  return changed ? change : null;
+}
+
+/** Compares two same-named networks for config drift (driver/external), independent of name changes. */
+function diffNetwork(before: NetworkNode, after: NetworkNode): NetworkChange | null {
+  const change: NetworkChange = { name: before.name };
+  let changed = false;
+
+  if (before.driver !== after.driver) {
+    change.driver = { before: before.driver, after: after.driver };
+    changed = true;
+  }
+  if (before.external !== after.external) {
+    change.external = { before: before.external, after: after.external };
+    changed = true;
+  }
+
   return changed ? change : null;
 }
 
@@ -100,12 +136,24 @@ export function diffGraphs(before: ComposeGraph, after: ComposeGraph): GraphDiff
     after.networks.map((n) => n.name)
   );
 
+  const beforeNetByName = new Map(before.networks.map((n) => [n.name, n]));
+  const afterNetByName = new Map(after.networks.map((n) => [n.name, n]));
+  const networksChanged: NetworkChange[] = [];
+  for (const [name, beforeNet] of beforeNetByName) {
+    const afterNet = afterNetByName.get(name);
+    if (!afterNet) continue;
+    const change = diffNetwork(beforeNet, afterNet);
+    if (change) networksChanged.push(change);
+  }
+  networksChanged.sort((a, b) => a.name.localeCompare(b.name));
+
   const hasChanges =
     servicesAdded.length > 0 ||
     servicesRemoved.length > 0 ||
     servicesChanged.length > 0 ||
     networkDiff.added.length > 0 ||
-    networkDiff.removed.length > 0;
+    networkDiff.removed.length > 0 ||
+    networksChanged.length > 0;
 
   return {
     servicesAdded,
@@ -113,6 +161,7 @@ export function diffGraphs(before: ComposeGraph, after: ComposeGraph): GraphDiff
     servicesChanged,
     networksAdded: networkDiff.added,
     networksRemoved: networkDiff.removed,
+    networksChanged,
     hasChanges,
   };
 }
@@ -140,6 +189,14 @@ export function formatDiff(diff: GraphDiff): string {
     for (const n of change.networksRemoved) lines.push(`    - network ${n}`);
     for (const d of change.dependsOnAdded) lines.push(`    + depends_on ${d}`);
     for (const d of change.dependsOnRemoved) lines.push(`    - depends_on ${d}`);
+    for (const e of change.environmentKeysAdded) lines.push(`    + environment ${e}`);
+    for (const e of change.environmentKeysRemoved) lines.push(`    - environment ${e}`);
+  }
+
+  for (const change of diff.networksChanged) {
+    lines.push(`~ network changed: ${change.name}`);
+    if (change.driver) lines.push(`    driver: ${change.driver.before ?? "(none)"} -> ${change.driver.after ?? "(none)"}`);
+    if (change.external) lines.push(`    external: ${change.external.before} -> ${change.external.after}`);
   }
 
   return lines.join("\n");
